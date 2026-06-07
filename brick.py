@@ -1,4 +1,4 @@
-"""
+﻿"""
 brick.py
 
 ========================================
@@ -40,6 +40,8 @@ class Brick:
         self.score = 0
         self.emotion = "none"
         self.color = "gray"
+        self.rect_id = None
+        self.text_id = None
 
     def hit(self, damage=1):
         self.hp -= damage
@@ -64,24 +66,34 @@ class Brick:
         pass
 
     def draw(self, canvas):
+
         if self.destroyed:
             return
 
-        canvas.create_rectangle(
-            self.x,
-            self.y,
-            self.x + self.WIDTH,
-            self.y + self.HEIGHT,
-            fill=self.color,
-            outline="black"
-        )
+        if self.rect_id is None:
 
-        canvas.create_text(
-            self.x + self.WIDTH // 2,
-            self.y + self.HEIGHT // 2,
-            text=str(self.hp),
-            fill="white"
-        )
+            self.rect_id = canvas.create_rectangle(
+                self.x,
+                self.y,
+                self.x + self.WIDTH,
+                self.y + self.HEIGHT,
+                fill=self.color,
+                outline="black"
+            )
+
+            self.text_id = canvas.create_text(
+                self.x + self.WIDTH//2,
+                self.y + self.HEIGHT//2,
+                text=str(self.hp),
+                fill="white"
+            )
+
+        else:
+
+            canvas.itemconfig(
+                self.text_id,
+                text=str(self.hp)
+            )
 
     def get_score(self):
         return self.score
@@ -91,6 +103,14 @@ class Brick:
 
     def is_destroyed(self):
         return self.destroyed
+    
+    def remove(self, canvas):
+
+        if self.rect_id:
+            canvas.delete(self.rect_id)
+
+        if self.text_id:
+            canvas.delete(self.text_id)
 
 
 class AngerBrick(Brick):

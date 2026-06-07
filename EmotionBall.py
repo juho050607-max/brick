@@ -172,35 +172,18 @@ class EmotionBall:
 
             hit_pos = (self.x - paddle_x) / paddle_width
 
-            bounce_angle = math.radians(
-                225 + (90 * hit_pos)
+            offset = (
+                (self.x - paddle_x)
+                / paddle_width
             )
 
-            if self.emotion == "JOY" and active_bricks:
+            offset = (offset - 0.5) * 2
 
-                target_brick = min(
-                    active_bricks,
-                    key=lambda b:
-                    math.hypot(
-                        b.x - self.x,
-                        b.y - self.y
-                    )
-                )
+            self.vx = offset * self.speed
 
-                target_angle = math.atan2(
-                    target_brick.y - self.y,
-                    target_brick.x - self.x
-                )
-
-                blend_factor = 0.3
-
-                bounce_angle = (
-                    bounce_angle * (1 - blend_factor)
-                    + target_angle * blend_factor
-                )
-
-            self.vx = math.cos(bounce_angle) * self.speed
-            self.vy = math.sin(bounce_angle) * self.speed
+            self.vy = -(
+                self.speed**2 - self.vx**2
+            ) ** 0.5
     
             if self.emotion == "SURPRISE":
                 self._apply_emotion_speed()

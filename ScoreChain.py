@@ -46,10 +46,10 @@ class ScoreManager:
     def __init__(self):
         self.total_score = 0
         self.base_scores = {
-            "분노": 100,
-            "기쁨": 60,
-            "공포": 80,
-            "놀람": 70
+            "anger": 100,
+            "joy": 60,
+            "fear": 80,
+            "surprise": 70
         }
 
     def calculate_score(self, emotion: str, chain_count: int, is_explosion=False) -> int:
