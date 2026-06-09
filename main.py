@@ -1,4 +1,4 @@
-import math
+﻿import math
 import random
 import time
 import tkinter as tk
@@ -825,24 +825,6 @@ class EmotionDestroyer:
         now = self.game_now()
         ball.set_emotion(mapping[brick_emotion], now)
         ball.set_speed_preserve_direction(BALL_BASE_SPEED * self.stage_speed_multiplier * ball.current_speed_multiplier())
-
-    def trigger_explosion_effect(self, x, y):
-        """폭발 지점에 파티클 효과를 생성하고 0.5초 뒤 삭제하는 함수"""
-        # 주변에 15개의 작은 원(파티클) 생성
-        for _ in range(15):
-            size = random.randint(3, 7)
-            p_id = self.canvas.create_oval(
-                x - size, y - size, x + size, y + size, 
-                fill="white", outline="yellow", tags=("overlay",)
-            )
-            
-            # 파티클이 랜덤하게 튀는 방향으로 이동하게 함
-            dx = random.uniform(-30, 30)
-            dy = random.uniform(-30, 30)
-            self.canvas.move(p_id, dx, dy)
-            
-            # 0.5초(500ms) 후에 해당 파티클 삭제
-            self.root.after(500, lambda p=p_id: self.canvas.delete(p))
     
     def emotion_explosion(self, center_brick, emotion):
         # 주위 최대 8개 파괴
@@ -868,7 +850,7 @@ class EmotionDestroyer:
             if brick.crack_item is not None:
                 self.canvas.itemconfigure(brick.crack_item, state="hidden")
                 
-        self.trigger_explosion_effect(center_brick.x, center_brick.y)
+        
         
         self.chain_system.penalty_after_explosion()
         now = self.game_now()
@@ -1073,34 +1055,7 @@ class EmotionDestroyer:
 
         self.root.after(FPS_DELAY_MS, self.run)
 
-    def run(self):
-        """메인 게임 루프"""
-        if self.state == "playing":
-            self.update_game_logic()
-        
-        # UI 업데이트
-        self.canvas.itemconfig(self.score_text, text=f"Score: {self.score_manager.total_score}")
-        self.canvas.itemconfig(self.chain_text, text=f"Chain: {self.chain_system.chain_count}")
-        self.canvas.itemconfig(self.life_text, text=f"Life: {self.lives}")
-        self.canvas.itemconfig(self.emotion_text, text=self.main_ball.emotion)
-
-        # 메시지 및 아이템 정리
-        self.update_messages()
-        self.update_items()
-        
-        self.root.after(FPS_DELAY_MS, self.run)
-
-    def update_messages(self):
-        now = self.game_now()
-        for msg in list(self.messages):
-            if msg.expired(now):
-                self.canvas.delete(msg.item_id)
-                self.messages.remove(msg)
-
-
+   
 
 if __name__ == "__main__":
     EmotionDestroyer()
-
-
-
