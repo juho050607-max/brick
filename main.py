@@ -825,7 +825,7 @@ class EmotionDestroyer:
         now = self.game_now()
         ball.set_emotion(mapping[brick_emotion], now)
         ball.set_speed_preserve_direction(BALL_BASE_SPEED * self.stage_speed_multiplier * ball.current_speed_multiplier())
-    
+
     def emotion_explosion(self, center_brick, emotion):
         # 주위 최대 8개 파괴
         targets = []
@@ -849,9 +849,7 @@ class EmotionDestroyer:
                 self.canvas.itemconfigure(brick.canvas_item, state="hidden")
             if brick.crack_item is not None:
                 self.canvas.itemconfigure(brick.crack_item, state="hidden")
-                
-        
-        
+
         self.chain_system.penalty_after_explosion()
         now = self.game_now()
         self.main_ball.set_emotion(emotion.upper(), now, lock=True, lock_duration=EMOTION_LOCK_DURATION)
@@ -1055,7 +1053,9 @@ class EmotionDestroyer:
 
         self.root.after(FPS_DELAY_MS, self.run)
 
-   
 
 if __name__ == "__main__":
     EmotionDestroyer()
+
+
+
