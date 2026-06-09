@@ -787,7 +787,7 @@ class EmotionDestroyer:
         damage = self.damage_value_for_ball(ball)
         destroyed_now = brick.hit(damage)
 
-        if not destroyed_now and ball.emotion != "FEAR":
+        if ball.emotion != "FEAR":
             self.resolve_brick_reflection(ball, brick)
 
         if destroyed_now:
@@ -804,6 +804,7 @@ class EmotionDestroyer:
 
             if chain >= EMOTION_EXPLOSION_CHAIN:
                 self.emotion_explosion(brick, brick.emotion)
+
 
     def set_ball_emotion_from_brick(self, ball, brick_emotion):
         if not ball.affects_emotion:
@@ -1033,7 +1034,6 @@ class EmotionDestroyer:
             self.update_ui()
             self.stage_clear_check()
         elif self.state == "paused":
-            self.main_ball.attach_to_paddle(self.paddle.x, self.paddle.width, self.paddle.y)
             self.update_bricks()
             self.update_ui()
         elif self.state == "stage_intro":
