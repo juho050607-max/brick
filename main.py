@@ -1073,31 +1073,7 @@ class EmotionDestroyer:
 
         self.root.after(FPS_DELAY_MS, self.run)
 
-    def run(self):
-        """메인 게임 루프"""
-        if self.state == "playing":
-            self.update_game_logic()
-        
-        # UI 업데이트
-        self.canvas.itemconfig(self.score_text, text=f"Score: {self.score_manager.total_score}")
-        self.canvas.itemconfig(self.chain_text, text=f"Chain: {self.chain_system.chain_count}")
-        self.canvas.itemconfig(self.life_text, text=f"Life: {self.lives}")
-        self.canvas.itemconfig(self.emotion_text, text=self.main_ball.emotion)
-
-        # 메시지 및 아이템 정리
-        self.update_messages()
-        self.update_items()
-        
-        self.root.after(FPS_DELAY_MS, self.run)
-
-    def update_messages(self):
-        now = self.game_now()
-        for msg in list(self.messages):
-            if msg.expired(now):
-                self.canvas.delete(msg.item_id)
-                self.messages.remove(msg)
-
-
+   
 
 if __name__ == "__main__":
     EmotionDestroyer()
