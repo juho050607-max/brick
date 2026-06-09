@@ -2,6 +2,7 @@ import math
 import random
 import time
 import tkinter as tk
+import pygame
 
 
 WIDTH = 800
@@ -420,6 +421,12 @@ class ItemDrop:
 class EmotionDestroyer:
     def __init__(self):
         self.root = tk.Tk()
+
+        pygame.mixer.init()
+        pygame.mixer.music.load("assets/sounds/freesound_community-8bit-music-for-game-68698.mp3")
+        pygame.mixer.music.set_volume(0.5)
+        pygame.mixer.music.play(-1)  #무한반복
+        
         self.root.title("감정 파괴자")
         self.canvas = tk.Canvas(self.root, width=WIDTH, height=HEIGHT, bg="black")
         self.canvas.pack()
