@@ -1,9 +1,15 @@
-import math
+﻿import math
+import os
 import random
 import time
+from pathlib import Path
+
 import tkinter as tk
-import pygame
+import tkinter.font as tkfont
+
 from PIL import Image, ImageTk
+
+import pygame  
 
 
 WIDTH = 800
@@ -25,11 +31,18 @@ BRICK_WIDTH = (WIDTH - BRICK_MARGIN_X * 2 - BRICK_GAP_X * (BRICK_COLS - 1)) // B
 PADDLE_Y = HEIGHT - 80
 PADDLE_WIDTH = 120
 PADDLE_HEIGHT = 16
-PADDLE_SPEED = 14  # 기존 대비 1.2배 수준
+PADDLE_SPEED = 18.2  # 기존 대비 1.3배 수준
 
 BALL_RADIUS = 9
 BALL_BASE_SPEED = 6.0  # 기존 대비 1.2배 수준
 FPS_DELAY_MS = 13
+
+UI_BOX_HEIGHT = 24
+UI_BOX_Y_TOP = 10
+UI_BOX_Y_BOTTOM = UI_BOX_Y_TOP + UI_BOX_HEIGHT + 4
+UI_RIGHT_BOX_WIDTH = 150
+UI_LIFE_X = WIDTH - UI_RIGHT_BOX_WIDTH - 10
+UI_HIGH_SCORE_X = 10
 
 STAGE_SPEED_STEP = 0.04
 FEAR_HIDE_MIN = 0.5
@@ -38,7 +51,7 @@ FEAR_HIDDEN_DURATION = 0.5
 
 ITEM_MSG_DURATION = 0.4
 PADDLE_EFFECT_DURATION = 5.0
-EMOTION_EXPLOSION_CHAIN = 5
+EMOTION_EXPLOSION_CHAIN = 3
 EMOTION_LOCK_DURATION = 5.0
 
 
@@ -49,6 +62,20 @@ def clamp(value, low, high):
 def angle_to_vector(angle_deg, speed):
     rad = math.radians(angle_deg)
     return math.cos(rad) * speed, math.sin(rad) * speed
+
+
+def find_asset_path(filename):
+    base_dir = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+    candidates = [
+        base_dir / filename,
+        base_dir / "assets" / "image" / filename,
+        base_dir / "assets" / "images" / filename,
+        base_dir / "images" / filename,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 class FloatingMessage:
@@ -80,6 +107,7 @@ class EmotionChainSystem:
     def __init__(self):
         self.chain_count = 0
         self.last_emotion = None
+        self.pending_explosion = False
 
     def add_chain(self, emotion):
         if self.last_emotion == emotion:
@@ -88,6 +116,18 @@ class EmotionChainSystem:
             self.chain_count = 1
             self.last_emotion = emotion
         return self.chain_count
+
+    def arm_pending_explosion(self):
+        if self.chain_count >= EMOTION_EXPLOSION_CHAIN:
+            self.pending_explosion = True
+
+    def consume_pending_explosion(self):
+        armed = self.pending_explosion
+        self.pending_explosion = False
+        return armed
+
+    def clear_pending_explosion(self):
+        self.pending_explosion = False
 
     def penalty_after_explosion(self):
         self.chain_count = max(0, self.chain_count - 3)
@@ -101,6 +141,7 @@ class ScoreManager:
         self.total_score += points
 
 
+
 class Paddle:
     def __init__(self, canvas):
         self.canvas = canvas
@@ -112,6 +153,7 @@ class Paddle:
         self.move_left_flag = False
         self.move_right_flag = False
         self.scale = 1.0
+        self.active_effects = {}
         self.effect_until = 0.0
         self.effect_type = None
         self.id = self.canvas.create_rectangle(
@@ -128,16 +170,40 @@ class Paddle:
     def width(self):
         return self.base_width * self.scale
 
-    def set_scale(self, scale, now, duration=0.0, effect_type=None):
-        self.scale = scale
-        self.effect_until = now + duration if duration > 0 else 0.0
+    def apply_effect(self, effect_type, factor, now, duration):
+        if effect_type in self.active_effects:
+            old_factor, _ = self.active_effects.pop(effect_type)
+            self.scale /= old_factor
+        self.scale *= factor
+        self.active_effects[effect_type] = (factor, now + duration)
+        self.effect_until = now + duration
         self.effect_type = effect_type
 
+    def set_scale(self, scale, now, duration=0.0, effect_type=None):
+        if effect_type is None:
+            effect_type = f"scale_{len(self.active_effects) + 1}"
+        if duration <= 0:
+            self.scale = scale
+            self.active_effects[effect_type] = (scale, now)
+            self.effect_until = 0.0
+            self.effect_type = effect_type
+            return
+        self.apply_effect(effect_type, scale, now, duration)
+
     def update_effect(self, now):
-        if self.effect_until and now >= self.effect_until:
-            self.scale = 1.0
+        expired = []
+        for effect_type, (factor, until) in list(self.active_effects.items()):
+            if now >= until:
+                expired.append((effect_type, factor))
+        for effect_type, factor in expired:
+            if effect_type in self.active_effects:
+                self.active_effects.pop(effect_type, None)
+                if factor != 0:
+                    self.scale /= factor
+        if not self.active_effects:
             self.effect_until = 0.0
             self.effect_type = None
+        self.scale = clamp(self.scale, 0.3, 3.0)
 
     def update(self, now):
         self.update_effect(now)
@@ -168,6 +234,7 @@ class Ball:
         self.emotion_lock_value = None
         self.emotion_speed_bonus = 0.0  # joy 계열
         self.item_speed_bonus = 0.0
+        self.fear_escape_armed = True
         self.id = self.canvas.create_oval(
             self.x - self.radius,
             self.y - self.radius,
@@ -183,13 +250,13 @@ class Ball:
     def current_speed_multiplier(self):
         base = 1.0 + self.emotion_speed_bonus + self.item_speed_bonus
         if self.emotion == "ANGER":
-            return base * 1.4
+            return base * 1.3
         if self.emotion == "JOY":
             return base * 1.0
         if self.emotion == "FEAR":
-            return base * 0.7
+            return base * 0.95
         if self.emotion == "SURPRISE":
-            return base * 1.15
+            return base * 1.0
         return base
 
     def set_emotion(self, emotion, now, lock=False, lock_duration=0.0):
@@ -204,6 +271,7 @@ class Ball:
             "NORMAL": "cyan",
         }
         self.canvas.itemconfig(self.id, fill=color_map.get(emotion, "cyan"))
+        self.fear_escape_armed = emotion == "FEAR"
         if lock:
             self.emotion_lock_value = emotion
             self.emotion_locked_until = now + lock_duration
@@ -298,7 +366,32 @@ class Brick:
         self.visible = True
         self.canvas_item = None
         self.crack_item = None
-        self.image_dict = image_dict
+        self.image_dict = image_dict or {}
+        self.finalized = False
+
+    def _hp_level(self):
+        if self.max_hp >= 3:
+            return 3 if self.hp >= 3 else 2 if self.hp >= 2 else 1
+        if self.max_hp == 2:
+            return 2 if self.hp >= 2 else 1
+        return 1
+
+    def _image_key(self):
+        if self.emotion == "anger":
+            return f"anger_hp{self._hp_level()}"
+        if self.emotion == "joy":
+            return "joy"
+        if self.emotion == "fear":
+            return "fear"
+        if self.emotion == "surprise":
+            return f"surprise_hp{2 if self.hp >= 2 else 1}"
+        return None
+
+    def _image_obj(self):
+        key = self._image_key()
+        if key is None:
+            return None
+        return self.image_dict.get(key)
 
     def draw(self, canvas):
         if self.destroyed or not self.visible:
@@ -308,45 +401,54 @@ class Brick:
                 canvas.itemconfigure(self.crack_item, state="hidden")
             return
 
+        image_obj = self._image_obj()
         if self.canvas_item is None:
-            
-            if self.emotion == "anger":
+            if image_obj is not None:
                 self.canvas_item = canvas.create_image(
-                    self.x + self.w /2,
-                    self.y + self.h /2,
-                    image = self.image_dict["anger_hp3"],
-                    tags=("game",
-                          )
+                    self.x + self.w / 2,
+                    self.y + self.h / 2,
+                    image=image_obj,
+                    tags=("game",),
                 )
-            
+                self.crack_item = None
             else:
                 self.canvas_item = canvas.create_rectangle(
-                    self.x, self.y, self.x + self.w, self.y+self.h, fill=self.color,
-                    outline="white", width=1, tags=("game",)
+                    self.x, self.y, self.x + self.w, self.y + self.h,
+                    fill=self.color, outline="white", width=1, tags=("game",)
+                )
+                self.crack_item = canvas.create_text(
+                    self.x + self.w / 2,
+                    self.y + self.h / 2,
+                    text="",
+                    fill="white",
+                    font=("Arial", 10, "bold"),
+                    tags=("game",)
                 )
         else:
-            canvas.itemconfigure(self.canvas_item, state="normal")
-            canvas.itemconfigure(self.crack_item, state="normal")
-
-        if self.max_hp >= 3:
-            crack_text = "III" if self.hp >= 3 else "II" if self.hp >= 2 else "I"
-        elif self.max_hp == 2:
-            crack_text = "II" if self.hp >= 2 else "I"
-        else:
-            crack_text = ""
-        canvas.itemconfigure(self.crack_item, text=crack_text)
-
-        if self.emotion == "anger":
-            if self.hp >= 3:
-                image_key = "anger_hp3"
-            elif self.hp >=2:
-                image_key = "anger_hp2"
+            if image_obj is not None:
+                canvas.itemconfigure(self.canvas_item, image=image_obj, state="normal")
+                if self.crack_item is not None:
+                    canvas.itemconfigure(self.crack_item, state="hidden")
             else:
-                image_key = "anger_hp1"
+                canvas.itemconfigure(self.canvas_item, state="normal")
+                if self.crack_item is not None:
+                    canvas.itemconfigure(self.crack_item, state="normal")
+                    if self.max_hp >= 3:
+                        crack_text = "III" if self.hp >= 3 else "II" if self.hp >= 2 else "I"
+                    elif self.max_hp == 2:
+                        crack_text = "II" if self.hp >= 2 else "I"
+                    else:
+                        crack_text = ""
+                    canvas.itemconfigure(self.crack_item, text=crack_text)
 
-            canvas.itemconfig(
-                self.canvas_item, image=self.image_dict[image_key]
-            )
+        if self.crack_item is not None and image_obj is None:
+            if self.max_hp >= 3:
+                crack_text = "III" if self.hp >= 3 else "II" if self.hp >= 2 else "I"
+            elif self.max_hp == 2:
+                crack_text = "II" if self.hp >= 2 else "I"
+            else:
+                crack_text = ""
+            canvas.itemconfigure(self.crack_item, text=crack_text)
 
     def remove(self, canvas):
         self.destroyed = True
@@ -368,8 +470,9 @@ class Brick:
 
 
 class FearBrick(Brick):
-    def __init__(self, x, y, now):
-        super().__init__(x, y, "fear", 1, 80, "#5c4b99")
+
+    def __init__(self, x, y, now, image_dict=None):
+        super().__init__(x, y, "fear", 1, 80, "#5c4b99", image_dict)
         self.next_toggle_at = now + random.uniform(FEAR_HIDE_MIN, FEAR_HIDE_MAX)
         self.hidden_until = None
 
@@ -389,8 +492,8 @@ class FearBrick(Brick):
 
 
 class SurpriseBrick(Brick):
-    def __init__(self, x, y):
-        super().__init__(x, y, "surprise", 2, 70, "#ff8fcf")
+    def __init__(self, x, y, image_dict=None):
+        super().__init__(x, y, "surprise", 2, 70, "#ff8fcf", image_dict)
 
 
 class ItemDrop:
@@ -435,6 +538,7 @@ class ItemDrop:
         self.canvas.delete(self.id)
 
 
+
 class EmotionDestroyer:
     def __init__(self):
         self.root = tk.Tk()
@@ -442,24 +546,20 @@ class EmotionDestroyer:
         pygame.mixer.init()
         pygame.mixer.music.load("assets/sounds/freesound_community-8bit-music-for-game-68698.mp3")
         pygame.mixer.music.set_volume(0.5)
-        pygame.mixer.music.play(-1)  #무한반복
-        
+        pygame.mixer.music.play(-1)
+
         self.root.title("감정 파괴자")
         self.canvas = tk.Canvas(self.root, width=WIDTH, height=HEIGHT, bg="black")
         self.canvas.pack()
 
-        self.brick_images = {
-            "anger_hp3": ImageTk.PhotoImage(
-                Image.open("assets/image/anger3.png").resize((BRICK_WIDTH+37, BRICK_HEIGHT+37))
-            ),
-            "anger_hp2": ImageTk.PhotoImage(
-                Image.open("assets/image/anger2.png").resize((BRICK_WIDTH+37, BRICK_HEIGHT+37))
-            ),
-            "anger_hp1": ImageTk.PhotoImage(
-                Image.open("assets/image/anger1.png").resize((BRICK_WIDTH+37, BRICK_HEIGHT+37))
-            ),
+        self.brick_images = self.load_brick_images()
 
-        }
+        self.high_score = 0
+        self.stage_timer_start = None
+        self.stage_timer_frozen = None
+
+        self.ui_font = tkfont.Font(family="Arial", size=14, weight="bold")
+        self.ui_font_small = tkfont.Font(family="Arial", size=12, weight="bold")
 
         self.root.bind("<Left>", self.key_left_press)
         self.root.bind("<Right>", self.key_right_press)
@@ -482,6 +582,143 @@ class EmotionDestroyer:
             return self.pause_started_at - self.paused_total
         return time.time() - self.paused_total
 
+    def current_elapsed_time(self):
+        if self.stage_timer_frozen is not None:
+            return self.stage_timer_frozen
+        if self.stage_timer_start is None:
+            return 0.0
+        return max(0.0, self.game_now() - self.stage_timer_start)
+
+    def format_elapsed_time(self):
+        elapsed = self.current_elapsed_time()
+        total_cs = int(round(elapsed * 100))
+        minutes = total_cs // 6000
+        seconds = (total_cs // 100) % 60
+        centis = total_cs % 100
+        return f"{minutes:02d}.{seconds:02d}"
+
+    def freeze_timer(self):
+        if self.stage_timer_start is not None and self.stage_timer_frozen is None:
+            self.stage_timer_frozen = self.current_elapsed_time()
+
+    def start_timer_if_needed(self):
+        if self.stage_timer_start is None and self.stage == 1:
+            self.stage_timer_start = self.game_now()
+            self.stage_timer_frozen = None
+
+    def update_high_score(self, final_score=None):
+        if final_score is None:
+            final_score = self.score_manager.total_score
+        if final_score > self.high_score:
+            self.high_score = final_score
+
+    def compute_clear_time_bonus(self):
+        elapsed = self.current_elapsed_time()
+        if elapsed < 600:
+            return 20000
+        if elapsed < 900:
+            return 15000
+        if elapsed < 1200:
+            return 10000
+        if elapsed < 1500:
+            return 5000
+        return 0
+
+    def _measure_text_width(self, text, font_obj=None):
+        if font_obj is None:
+            font_obj = self.ui_font
+        return font_obj.measure(text)
+
+    def _create_or_update_text(self, item_id, x, y, text, fill="white", font=None, tags=("ui",)):
+        if font is None:
+            font = self.ui_font
+        if item_id is None:
+            return self.canvas.create_text(x, y, text=text, fill=fill, font=font, tags=tags)
+        self.canvas.coords(item_id, x, y)
+        self.canvas.itemconfig(item_id, text=text, fill=fill, font=font)
+        return item_id
+
+    def _create_or_update_rect(self, item_id, x1, y1, x2, y2, fill="white", outline="black", tags=("ui",)):
+        if item_id is None:
+            return self.canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, tags=tags)
+        self.canvas.coords(item_id, x1, y1, x2, y2)
+        self.canvas.itemconfig(item_id, fill=fill, outline=outline)
+        return item_id
+
+    def _create_ui_items(self):
+        self.score_text = self.canvas.create_text(90, 22, fill="white", text="Score: 0", font=self.ui_font, tags=("ui",))
+        self.chain_text = self.canvas.create_text(250, 22, fill="white", text="Chain: 0", font=self.ui_font, tags=("ui",))
+        self.emotion_text = self.canvas.create_text(560, 22, fill="cyan", text="NORMAL", font=self.ui_font, tags=("ui",))
+
+        self.life_box_rect = self.canvas.create_rectangle(
+            UI_LIFE_X, UI_BOX_Y_TOP, UI_LIFE_X + UI_RIGHT_BOX_WIDTH, UI_BOX_Y_TOP + UI_BOX_HEIGHT,
+            fill="black", outline="black", tags=("ui",)
+        )
+        self.life_box_text = self.canvas.create_text(
+            UI_LIFE_X + UI_RIGHT_BOX_WIDTH / 2, UI_BOX_Y_TOP + UI_BOX_HEIGHT / 2,
+            fill="white", text="Life: 3", font=self.ui_font, tags=("ui",)
+        )
+
+        self.time_box_rect = self.canvas.create_rectangle(
+            UI_LIFE_X, UI_BOX_Y_BOTTOM, UI_LIFE_X + UI_RIGHT_BOX_WIDTH, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT,
+            fill="black", outline="black", tags=("ui",)
+        )
+        self.time_box_text = self.canvas.create_text(
+            UI_LIFE_X + UI_RIGHT_BOX_WIDTH / 2, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT / 2,
+            fill="white", text="걸린 시간 : 00.00", font=self.ui_font, tags=("ui",)
+        )
+
+        high_text = f"최고 점수 : {self.high_score}점"
+        high_width = max(120, int(self._measure_text_width(high_text, self.ui_font) * 1.1))
+        self.high_score_box_rect = self.canvas.create_rectangle(
+            UI_HIGH_SCORE_X, UI_BOX_Y_BOTTOM, UI_HIGH_SCORE_X + high_width, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT,
+            fill="black", outline="black", tags=("ui",)
+        )
+        self.high_score_box_text = self.canvas.create_text(
+            UI_HIGH_SCORE_X + high_width / 2, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT / 2,
+            fill="white", text=high_text, font=self.ui_font, tags=("ui",)
+        )
+
+    def _create_side_walls(self):
+        self.side_wall_width = BRICK_MARGIN_X
+
+    def find_asset_path(self, filename):
+        base_dir = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+        candidates = [
+            base_dir / filename,
+            base_dir / "assets" / "image" / filename,
+            base_dir / "assets" / "images" / filename,
+            base_dir / "images" / filename,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def load_brick_images(self):
+        image_files = {
+            "anger_hp1": "anger1.png",
+            "anger_hp2": "anger2.png",
+            "anger_hp3": "anger3.png",
+            "fear": "fear.png",
+            "joy": "joy.png",
+            "surprise_hp1": "surprise1.png",
+            "surprise_hp2": "surprise2.png",
+        }
+        loaded = {}
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        for key, filename in image_files.items():
+            path = self.find_asset_path(filename)
+            if path is None:
+                loaded[key] = None
+                continue
+            try:
+                img = Image.open(path).convert("RGBA").resize((BRICK_WIDTH+33, BRICK_HEIGHT+33), resample)
+                loaded[key] = ImageTk.PhotoImage(img)
+            except Exception:
+                loaded[key] = None
+        return loaded
+
     def reset_game(self, full_reset=True, preserve_score=False, preserve_lives=False, preserve_stage=False):
         if hasattr(self, "canvas"):
             self.canvas.delete("all")
@@ -502,7 +739,8 @@ class EmotionDestroyer:
             if not hasattr(self, "chain_system"):
                 self.chain_system = EmotionChainSystem()
 
-        self.stage_speed_multiplier = 1.0 + (self.stage - 1) * STAGE_SPEED_STEP
+        self.stage_speed_multiplier = 1.10 + (self.stage - 1) * STAGE_SPEED_STEP
+        self.chain_system.clear_pending_explosion()
         self.game_running = True
         self.state = "stage_intro"
         self.stage_started = False
@@ -511,11 +749,16 @@ class EmotionDestroyer:
         self.paused_total = 0.0
         self.pause_started_at = None
         self.pending_main_launch_at = None
+        self.stage_timer_frozen = None
+        self.stage_timer_start = None
+        self.clear_time_bonus = 0
+        self.chain_system.clear_pending_explosion()
 
         self.messages = []
         self.items = []
         self.balls = []
 
+        self._create_side_walls()
         self.paddle = Paddle(self.canvas)
         self.main_ball = Ball(self.canvas, self.paddle.x + self.paddle.width / 2, self.paddle.y - 20, is_main=True)
         self.main_ball.attach_to_paddle(self.paddle.x, self.paddle.width, self.paddle.y)
@@ -524,12 +767,9 @@ class EmotionDestroyer:
         self.bricks = []
         self.create_stage()
 
-        self.score_text = self.canvas.create_text(90, 22, fill="white", text="Score: 0", font=("Arial", 14, "bold"), tags=("ui",))
-        self.chain_text = self.canvas.create_text(260, 22, fill="white", text="Chain: 0", font=("Arial", 14, "bold"), tags=("ui",))
-        self.life_text = self.canvas.create_text(450, 22, fill="white", text="Life: 3", font=("Arial", 14, "bold"), tags=("ui",))
-        self.emotion_text = self.canvas.create_text(650, 22, fill="cyan", text="NORMAL", font=("Arial", 14, "bold"), tags=("ui",))
-
+        self._create_ui_items()
         self.show_stage_intro()
+        self.update_ui()
 
     def create_stage(self):
         now = self.game_now()
@@ -540,13 +780,13 @@ class EmotionDestroyer:
                 y = BRICK_START_Y + r * (BRICK_HEIGHT + BRICK_GAP_Y)
                 emotion = random.choice(emotions)
                 if emotion == "anger":
-                    brick = Brick(x, y, "anger", 3, 100, "#a53d3d",self.brick_images)
+                    brick = Brick(x, y, "anger", 3, 100, "#a53d3d", self.brick_images)
                 elif emotion == "joy":
-                    brick = Brick(x, y, "joy", 1, 60, "#d8d23f")
+                    brick = Brick(x, y, "joy", 1, 60, "#d8d23f", self.brick_images)
                 elif emotion == "fear":
-                    brick = FearBrick(x, y, now)
+                    brick = FearBrick(x, y, now, self.brick_images)
                 else:
-                    brick = SurpriseBrick(x, y)
+                    brick = SurpriseBrick(x, y, self.brick_images)
                 self.bricks.append(brick)
                 brick.draw(self.canvas)
 
@@ -577,39 +817,117 @@ class EmotionDestroyer:
 
     def show_game_clear(self):
         self.state = "game_clear"
+        self.freeze_timer()
+        self.clear_time_bonus = self.compute_clear_time_bonus()
+        self.update_high_score(self.score_manager.total_score + self.clear_time_bonus)
         self.clear_overlay()
-        self.canvas.create_text(
-            WIDTH // 2, HEIGHT // 2 - 30,
-            text="축하합니다!",
-            fill="hot pink",
-            font=("Arial", 34, "bold"),
-            tags=("overlay",),
-        )
-        self.canvas.create_text(
-            WIDTH // 2, HEIGHT // 2 + 25,
-            text="게임 클리어!",
-            fill="sky blue",
-            font=("Arial", 34, "bold"),
-            tags=("overlay",),
-        )
+
+        panel_w = int(WIDTH * 0.6)
+        panel_h = int(HEIGHT * 0.6)
+        x0 = (WIDTH - panel_w) / 2
+        y0 = (HEIGHT - panel_h) / 2
+        x1 = x0 + panel_w
+        y1 = y0 + panel_h
+
+        self.canvas.create_rectangle(x0, y0, x1, y1, fill="white", outline="black", tags=("overlay",))
+
+        restart_base = 18
+        score_bonus = self.clear_time_bonus
+        score_line = f"점수 : {self.score_manager.total_score}점"
+        if score_bonus > 0:
+            score_line = f"점수 : {self.score_manager.total_score}점  시간 보너스 +{score_bonus}점"
+
+        texts = [
+            "축하합니다!",
+            "게임 클리어!",
+            f"걸린 시간 : {self.format_elapsed_time()}",
+            score_line,
+            "R키를 눌러 재시작",
+        ]
+
+        base_sizes = [
+            restart_base * 1.8,
+            restart_base * 1.8,
+            restart_base * 0.45,
+            restart_base * (0.9 if score_bonus == 0 else 0.45),
+            restart_base,
+        ]
+
+        scale = 1.0
+        while True:
+            sizes = [max(1, int(round(s * scale))) for s in base_sizes]
+            fonts = [tkfont.Font(family="Arial", size=size, weight="bold") for size in sizes]
+            widths = [font.measure(text_item) for font, text_item in zip(fonts, texts)]
+            heights = [font.metrics("linespace") for font in fonts]
+            gaps = [
+                max(4, int(heights[0] * 0.14)),
+                max(3, int(heights[1] * 0.14)),
+                max(3, int(heights[2] * 0.18)),
+                max(3, int(heights[3] * 0.14)),
+            ]
+            total_h = sum(heights) + sum(gaps)
+            max_w = max(widths)
+            if (max_w <= panel_w * 0.90 and total_h <= panel_h * 0.90) or scale <= 0.25:
+                break
+            scale *= 0.95
+
+        center_x = (x0 + x1) / 2
+        y = y0 + (panel_h - total_h) / 2
+        for idx, (text_item, font, h) in enumerate(zip(texts, fonts, heights)):
+            self.canvas.create_text(center_x, y + h / 2, text=text_item, fill="black", font=font, tags=("overlay",))
+            if idx < len(gaps):
+                y += h + gaps[idx]
 
     def show_game_over(self):
         self.state = "game_over"
+        self.freeze_timer()
+        self.update_high_score()
         self.clear_overlay()
-        self.canvas.create_text(
-            WIDTH // 2, HEIGHT // 2 - 20,
-            text="GAME OVER",
-            fill="red",
-            font=("Arial", 34, "bold"),
-            tags=("overlay",),
-        )
-        self.canvas.create_text(
-            WIDTH // 2, HEIGHT // 2 + 28,
-            text="R 키로 다시 시작",
-            fill="white",
-            font=("Arial", 16, "bold"),
-            tags=("overlay",),
-        )
+
+        panel_w = int(WIDTH * 0.4)
+        panel_h = int(HEIGHT * 0.4)
+        x0 = (WIDTH - panel_w) / 2
+        y0 = (HEIGHT - panel_h) / 2
+        x1 = x0 + panel_w
+        y1 = y0 + panel_h
+
+        self.canvas.create_rectangle(x0, y0, x1, y1, fill="black", outline="white", tags=("overlay",))
+
+        restart_base = 16
+        base_sizes = [restart_base * 1.8, restart_base * 0.45, restart_base * 0.9, restart_base]
+        texts = [
+            "게임 종료",
+            f"걸린 시간 : {self.format_elapsed_time()}",
+            f"점수 : {self.score_manager.total_score}점",
+            "R키를 눌러 재시작",
+        ]
+
+        scale = 1.0
+        while True:
+            sizes = [max(1, int(round(s * scale))) for s in base_sizes]
+            fonts = [tkfont.Font(family="Arial", size=size, weight="bold") for size in sizes]
+            widths = [font.measure(text) for font, text in zip(fonts, texts)]
+            heights = [font.metrics("linespace") for font in fonts]
+            total_h = sum(heights) + int(heights[0] * 0.18) + int(heights[1] * 0.25) + int(heights[2] * 0.25)
+            max_w = max(widths)
+            if (max_w <= panel_w * 0.88 and total_h <= panel_h * 0.88) or scale <= 0.25:
+                break
+            scale *= 0.95
+
+        center_x = (x0 + x1) / 2
+        y = y0 + (panel_h - total_h) / 2
+        spacings = [int(heights[0] * 0.18), int(heights[1] * 0.25), int(heights[2] * 0.25), 0]
+        for idx, (text, font, h) in enumerate(zip(texts, fonts, heights)):
+            self.canvas.create_text(
+                center_x,
+                y + h / 2,
+                text=text,
+                fill="white",
+                font=font,
+                tags=("overlay",),
+            )
+            if idx < len(spacings):
+                y += h + spacings[idx]
 
     def clear_overlay(self):
         self.canvas.delete("overlay")
@@ -636,8 +954,6 @@ class EmotionDestroyer:
         self.messages.append(msg)
 
     def spawn_item(self, x, y):
-        if random.random() > 0.30:
-            return
         kind = random.choice(["multi_ball", "life", "paddle_up", "paddle_down"])
         self.items.append(ItemDrop(self.canvas, x, y, kind))
 
@@ -650,10 +966,10 @@ class EmotionDestroyer:
             self.lives += 1
             self.add_message("목숨 추가!", "orange")
         elif kind == "paddle_up":
-            self.paddle.set_scale(1.5, now, duration=PADDLE_EFFECT_DURATION, effect_type="up")
+            self.paddle.apply_effect("up", 1.5, now, PADDLE_EFFECT_DURATION)
             self.add_message("늘어나라!", "yellow")
         elif kind == "paddle_down":
-            self.paddle.set_scale(0.66, now, duration=PADDLE_EFFECT_DURATION, effect_type="down")
+            self.paddle.apply_effect("down", 0.66, now, PADDLE_EFFECT_DURATION)
             self.add_message("짧아져라!", "red")
 
     def spawn_surprise_multiball(self):
@@ -698,6 +1014,7 @@ class EmotionDestroyer:
     def start_stage_play(self):
         self.state = "playing"
         self.clear_overlay()
+        self.start_timer_if_needed()
         self.main_ball.attach_to_paddle(self.paddle.x, self.paddle.width, self.paddle.y)
         self.pending_main_launch_at = self.game_now() + 0.15
 
@@ -709,27 +1026,24 @@ class EmotionDestroyer:
             self.pending_main_launch_at = None
 
     def create_stage_clear_transition(self):
-        # 점수/목숨은 유지, 나머지 객체는 새 스테이지로 정리
         self.clear_overlay()
         self.canvas.delete("game")
-        self.canvas.delete("ui")
+        self.canvas.delete("wall")
         self.bricks.clear()
         self.items.clear()
         self.messages.clear()
         self.balls.clear()
 
+        self._create_side_walls()
         self.paddle = Paddle(self.canvas)
         self.main_ball = Ball(self.canvas, self.paddle.x + self.paddle.width / 2, self.paddle.y - 20, is_main=True)
         self.main_ball.attach_to_paddle(self.paddle.x, self.paddle.width, self.paddle.y)
         self.balls.append(self.main_ball)
 
-        self.stage_speed_multiplier = 1.0 + (self.stage - 1) * STAGE_SPEED_STEP
+        self.stage_speed_multiplier = 1.10 + (self.stage - 1) * STAGE_SPEED_STEP
         self.create_stage()
-        self.score_text = self.canvas.create_text(90, 22, fill="white", text=f"Score: {self.score_manager.total_score}", font=("Arial", 14, "bold"), tags=("ui",))
-        self.chain_text = self.canvas.create_text(260, 22, fill="white", text=f"Chain: {self.chain_system.chain_count}", font=("Arial", 14, "bold"), tags=("ui",))
-        self.life_text = self.canvas.create_text(450, 22, fill="white", text=f"Life: {self.lives}", font=("Arial", 14, "bold"), tags=("ui",))
-        self.emotion_text = self.canvas.create_text(650, 22, fill="cyan", text="NORMAL", font=("Arial", 14, "bold"), tags=("ui",))
         self.show_stage_intro()
+        self.update_ui()
 
     def advance_stage_or_clear(self):
         if all(brick.destroyed for brick in self.bricks):
@@ -748,22 +1062,51 @@ class EmotionDestroyer:
         nearest = min(alive, key=lambda b: abs((b.x + b.w / 2) - ball_x))
         return nearest.x + nearest.w / 2
 
-    def damage_value_for_ball(self, ball):
-        return 0.5 if ball.emotion == "FEAR" else 1.0
+    def apply_surprise_speed_and_angle(self, ball, min_deg=5, max_deg=30):
+        angle = math.degrees(math.atan2(ball.vy, ball.vx))
+        delta = random.uniform(min_deg, max_deg) * random.choice([-1, 1])
+        angle += delta
+        speed = math.hypot(ball.vx, ball.vy) * random.uniform(0.9, 1.1)
+        ball.vx, ball.vy = angle_to_vector(angle, speed)
+
+    def apply_surprise_paddle_bounce(self, ball, base_angle, speed):
+        delta = random.uniform(5, 30) * random.choice([-1, 1])
+        angle = clamp(base_angle + delta, 200, 340)
+        speed *= random.uniform(0.9, 1.1)
+        vx, vy = angle_to_vector(angle, speed)
+        if vy > -0.2:
+            vy = -abs(vy) if abs(vy) > 0.2 else -0.2
+        ball.vx = vx
+        ball.vy = vy
 
     def ball_bounce_x(self, ball):
         ball.vx *= -1
-        if ball.emotion == "ANGER":
-            ball.randomize_direction_small(15, 30)
-        elif ball.emotion == "SURPRISE":
-            ball.randomize_direction_small(5, 30)
+        if ball.emotion == "SURPRISE":
+            self.apply_surprise_speed_and_angle(ball, 5, 30)
 
     def ball_bounce_y(self, ball):
         ball.vy *= -1
-        if ball.emotion == "ANGER":
-            ball.randomize_direction_small(15, 30)
-        elif ball.emotion == "SURPRISE":
-            ball.randomize_direction_small(5, 30)
+        if ball.emotion == "SURPRISE":
+            self.apply_surprise_speed_and_angle(ball, 5, 30)
+
+    def handle_fear_escape(self, ball):
+        if ball.emotion != "FEAR":
+            return
+
+        threshold = HEIGHT * 0.6
+        if ball.y < threshold - ball.radius:
+            ball.fear_escape_armed = True
+
+        if not ball.fear_escape_armed or ball.y < threshold:
+            return
+
+        shift = WIDTH * 0.3
+        play_left = self.side_wall_width + ball.radius + 1
+        play_right = WIDTH - self.side_wall_width - ball.radius - 1
+        new_x = ball.x + shift if random.random() < 0.5 else ball.x - shift
+        ball.x = clamp(new_x, play_left, play_right)
+        ball.fear_escape_armed = False
+        ball.redraw()
 
     def handle_paddle_collision(self, ball):
         if ball.vy <= 0:
@@ -782,33 +1125,21 @@ class EmotionDestroyer:
         if not (crossed_from_above and within_x):
             return
 
-        # 달라붙지 않도록 패들 위로 정확히 되돌리고, 아래 방향 속도를 없앰
         ball.y = paddle_top - ball.radius - 1
 
-        # 기본 반사 각도
         hit_ratio = (ball.x - paddle_left) / max(1.0, self.paddle.width)
         hit_ratio = clamp(hit_ratio, 0.0, 1.0)
-        angle = 225 + hit_ratio * 90  # 225~315도, 항상 위쪽으로 발사
-
-        # 기쁨 공은 다음 벽돌 방향으로 살짝 유도
-        if ball.emotion == "JOY":
-            target_x = self.find_nearest_brick_x(ball.x)
-            if target_x is not None:
-                target_ratio = (target_x - paddle_left) / max(1.0, self.paddle.width)
-                target_ratio = clamp(target_ratio, 0.0, 1.0)
-                angle = 230 + target_ratio * 80
+        angle = 225 + hit_ratio * 90
 
         speed = math.hypot(ball.vx, ball.vy)
         if speed <= 0:
             speed = BALL_BASE_SPEED * self.stage_speed_multiplier * ball.current_speed_multiplier()
 
-        # 감정별 약간의 추가 흔들림
-        if ball.emotion == "ANGER":
-            angle += random.uniform(-20, 20)
-        elif ball.emotion == "SURPRISE":
-            angle += random.uniform(-15, 15)
+        if ball.emotion == "SURPRISE":
+            self.apply_surprise_paddle_bounce(ball, angle, speed)
+            ball.redraw()
+            return
 
-        # 위쪽 반사로 보장
         angle = clamp(angle, 200, 340)
         vx, vy = angle_to_vector(angle, speed)
         if vy > -0.2:
@@ -817,6 +1148,38 @@ class EmotionDestroyer:
         ball.vy = vy
         ball.redraw()
 
+    def damage_value_for_ball(self, ball):
+        return 1.0
+
+
+    def finalize_destroyed_brick(self, brick, score_value, spawn_item=False):
+        if brick.finalized:
+            return
+        brick.finalized = True
+        brick.destroyed = True
+        brick.visible = False
+        if score_value is not None:
+            self.score_manager.add_score(score_value)
+        if spawn_item and isinstance(brick, SurpriseBrick):
+            self.spawn_item(brick.x + brick.w / 2, brick.y + brick.h / 2)
+        if brick.canvas_item is not None:
+            self.canvas.itemconfigure(brick.canvas_item, state="hidden")
+        if brick.crack_item is not None:
+            self.canvas.itemconfigure(brick.crack_item, state="hidden")
+
+    def apply_joy_side_damage(self, center_brick):
+        # 행복이 세배: 양옆 벽돌도 동일하게 1 데미지를 준다.
+        row_y = center_brick.y
+        target_xs = [center_brick.x - (BRICK_WIDTH + BRICK_GAP_X), center_brick.x + (BRICK_WIDTH + BRICK_GAP_X)]
+        for target_x in target_xs:
+            for brick in self.bricks:
+                if brick.destroyed or not brick.visible:
+                    continue
+                if abs(brick.y - row_y) <= 1 and abs(brick.x - target_x) <= 1:
+                    if brick.hit(1.0):
+                        self.finalize_destroyed_brick(brick, brick.score_value, spawn_item=True)
+                    break
+
     def handle_brick_collision(self, ball, brick):
         if brick.destroyed or not brick.visible:
             return
@@ -824,24 +1187,23 @@ class EmotionDestroyer:
         damage = self.damage_value_for_ball(ball)
         destroyed_now = brick.hit(damage)
 
-        if ball.emotion != "FEAR":
-            self.resolve_brick_reflection(ball, brick)
+        self.resolve_brick_reflection(ball, brick)
 
         if destroyed_now:
-            # 놀람 벽돌은 아이템 드랍 확률 30% (clone ball은 드랍 없음)
-            if isinstance(brick, SurpriseBrick) and ball.affects_emotion:
-                self.spawn_item(brick.x + brick.w / 2, brick.y + brick.h / 2)
+            self.finalize_destroyed_brick(brick, brick.score_value, spawn_item=True)
 
-            self.score_manager.add_score(brick.score_value)
+        if ball.emotion == "JOY":
+            self.apply_joy_side_damage(brick)
+
+        if destroyed_now:
             chain = self.chain_system.add_chain(brick.emotion)
             if chain > 1:
                 self.score_manager.add_score((chain - 1) * 20)
 
             self.set_ball_emotion_from_brick(ball, brick.emotion)
 
-            if chain >= EMOTION_EXPLOSION_CHAIN:
+            if self.chain_system.consume_pending_explosion() or chain == EMOTION_EXPLOSION_CHAIN:
                 self.emotion_explosion(brick, brick.emotion)
-
 
     def set_ball_emotion_from_brick(self, ball, brick_emotion):
         if not ball.affects_emotion:
@@ -857,7 +1219,6 @@ class EmotionDestroyer:
         ball.set_speed_preserve_direction(BALL_BASE_SPEED * self.stage_speed_multiplier * ball.current_speed_multiplier())
 
     def emotion_explosion(self, center_brick, emotion):
-        # 주위 최대 8개 파괴
         targets = []
         for brick in self.bricks:
             if brick.destroyed or brick is center_brick:
@@ -870,22 +1231,9 @@ class EmotionDestroyer:
         for brick in targets[:8]:
             if brick.destroyed:
                 continue
-            brick.destroyed = True
-            brick.visible = False
-            self.score_manager.add_score(brick.score_value // 2 + 20)
-            if isinstance(brick, SurpriseBrick):
-                self.spawn_item(brick.x + brick.w / 2, brick.y + brick.h / 2)
-            if brick.canvas_item is not None:
-                self.canvas.itemconfigure(brick.canvas_item, state="hidden")
-            if brick.crack_item is not None:
-                self.canvas.itemconfigure(brick.crack_item, state="hidden")
-
-        self.chain_system.penalty_after_explosion()
-        now = self.game_now()
-        self.main_ball.set_emotion(emotion.upper(), now, lock=True, lock_duration=EMOTION_LOCK_DURATION)
+            self.finalize_destroyed_brick(brick, brick.score_value // 2 + 20, spawn_item=True)
 
     def resolve_brick_reflection(self, ball, brick):
-        # 이전 위치를 기준으로 어느 면에 충돌했는지 판정
         prev_left = ball.prev_x - ball.radius
         prev_right = ball.prev_x + ball.radius
         prev_top = ball.prev_y - ball.radius
@@ -919,7 +1267,6 @@ class EmotionDestroyer:
             ball.x = brick_right + ball.radius + 1
             self.ball_bounce_x(ball)
         else:
-            # 교차가 애매하면 겹침이 작은 축으로 반사
             overlap_left = curr_right - brick_left
             overlap_right = brick_right - curr_left
             overlap_top = curr_bottom - brick_top
@@ -957,7 +1304,6 @@ class EmotionDestroyer:
                 continue
             item.update()
 
-            # 패드에 닿았을 때만 발동
             half = item.side / 2
             if (
                 self.paddle.x <= item.x <= self.paddle.x + self.paddle.width and
@@ -983,8 +1329,23 @@ class EmotionDestroyer:
     def update_ui(self):
         self.canvas.itemconfig(self.score_text, text=f"Score: {self.score_manager.total_score}")
         self.canvas.itemconfig(self.chain_text, text=f"Chain: {self.chain_system.chain_count}")
-        self.canvas.itemconfig(self.life_text, text=f"Life: {self.lives}")
+        self.canvas.itemconfig(self.life_box_text, text=f"Life: {self.lives}")
+        self.canvas.itemconfig(self.time_box_text, text=f"걸린 시간 : {self.format_elapsed_time()}")
         self.canvas.itemconfig(self.emotion_text, text=self.main_ball.emotion)
+
+        high_text = f"최고 점수 : {self.high_score}점"
+        high_width = max(120, int(self._measure_text_width(high_text, self.ui_font) * 1.1))
+        self.canvas.coords(self.high_score_box_rect,
+                           UI_HIGH_SCORE_X, UI_BOX_Y_BOTTOM,
+                           UI_HIGH_SCORE_X + high_width, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT)
+        self.canvas.coords(self.high_score_box_text,
+                           UI_HIGH_SCORE_X + high_width / 2, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT / 2)
+        self.canvas.itemconfig(self.high_score_box_text, text=high_text)
+
+        self.canvas.coords(self.life_box_rect, UI_LIFE_X, UI_BOX_Y_TOP, UI_LIFE_X + UI_RIGHT_BOX_WIDTH, UI_BOX_Y_TOP + UI_BOX_HEIGHT)
+        self.canvas.coords(self.life_box_text, UI_LIFE_X + UI_RIGHT_BOX_WIDTH / 2, UI_BOX_Y_TOP + UI_BOX_HEIGHT / 2)
+        self.canvas.coords(self.time_box_rect, UI_LIFE_X, UI_BOX_Y_BOTTOM, UI_LIFE_X + UI_RIGHT_BOX_WIDTH, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT)
+        self.canvas.coords(self.time_box_text, UI_LIFE_X + UI_RIGHT_BOX_WIDTH / 2, UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT / 2)
 
     def update_balls(self):
         if self.state != "playing":
@@ -993,13 +1354,7 @@ class EmotionDestroyer:
 
         self.launch_pending_main_ball_if_needed()
 
-        # 기쁨 공은 시간이 흐를수록 조금씩 빨라짐
         now = self.game_now()
-        for ball in self.balls:
-            if ball.emotion == "JOY" and not ball.attached:
-                ball.emotion_speed_bonus = clamp(ball.emotion_speed_bonus + 0.0015, 0.0, 0.6)
-                desired = BALL_BASE_SPEED * self.stage_speed_multiplier * ball.current_speed_multiplier()
-                ball.set_speed_preserve_direction(desired)
 
         for ball in list(self.balls):
             if ball.attached:
@@ -1010,22 +1365,21 @@ class EmotionDestroyer:
             ball.move_with_velocity()
             ball.redraw()
 
-            # 벽 충돌
-            if ball.x - ball.radius <= 0:
-                ball.x = ball.radius + 1
+            self.handle_fear_escape(ball)
+
+            if ball.x - ball.radius <= self.side_wall_width:
+                ball.x = self.side_wall_width + ball.radius + 1
                 self.ball_bounce_x(ball)
-            elif ball.x + ball.radius >= WIDTH:
-                ball.x = WIDTH - ball.radius - 1
+            elif ball.x + ball.radius >= WIDTH - self.side_wall_width:
+                ball.x = WIDTH - self.side_wall_width - ball.radius - 1
                 self.ball_bounce_x(ball)
 
-            if ball.y - ball.radius <= UI_HEIGHT:
-                ball.y = UI_HEIGHT + ball.radius + 1
+            if ball.y - ball.radius <= UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT + 2:
+                ball.y = UI_BOX_Y_BOTTOM + UI_BOX_HEIGHT + ball.radius + 1
                 self.ball_bounce_y(ball)
 
-            # 패드 충돌: 달라붙는 버그 방지용으로 "위에서 내려오는 경우"만 허용
             self.handle_paddle_collision(ball)
 
-            # 바닥 이탈
             if ball.y - ball.radius > HEIGHT:
                 if ball.is_main:
                     self.lives -= 1
@@ -1039,7 +1393,6 @@ class EmotionDestroyer:
                         self.balls.remove(ball)
                 continue
 
-            # 벽돌 충돌
             for brick in self.bricks:
                 if brick.destroyed or not brick.visible:
                     continue
@@ -1061,9 +1414,9 @@ class EmotionDestroyer:
             return
 
         now = self.game_now()
-        self.paddle.update(now)
 
         if self.state == "playing":
+            self.paddle.update(now)
             self.update_balls()
             self.update_items()
             self.update_messages()
@@ -1071,13 +1424,16 @@ class EmotionDestroyer:
             self.update_ui()
             self.stage_clear_check()
         elif self.state == "paused":
+            self.paddle.update_effect(now)
             self.update_bricks()
             self.update_ui()
         elif self.state == "stage_intro":
+            self.paddle.update_effect(now)
             self.main_ball.attach_to_paddle(self.paddle.x, self.paddle.width, self.paddle.y)
             self.update_bricks()
             self.update_ui()
         elif self.state in ("game_clear", "game_over"):
+            self.paddle.update_effect(now)
             self.update_bricks()
             self.update_ui()
 
@@ -1086,6 +1442,14 @@ class EmotionDestroyer:
 
 if __name__ == "__main__":
     EmotionDestroyer()
+
+
+
+
+
+
+
+
 
 
 
