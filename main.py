@@ -554,7 +554,7 @@ class EmotionDestroyer:
 
         self.brick_images = self.load_brick_images()
 
-        self.high_score = 0
+        self.high_score = self.load_high_score()
         self.stage_timer_start = None
         self.stage_timer_frozen = None
 
@@ -579,6 +579,17 @@ class EmotionDestroyer:
         self.run()
         self.root.mainloop()
     
+    def load_high_score(self):
+        try:
+            with open("highscore.txt", "r", encoding="utf-8") as f:
+                return int(f.read().strip())
+        except:
+            return 0
+    
+    def save_high_score(self):
+        with open("highscore.txt", "w", encoding="utf-8") as f:
+            f.write(str(self.high_score))
+
     def force_clear_stage_key(self, event=None):  
         self.force_clear_stage()
 
@@ -616,6 +627,7 @@ class EmotionDestroyer:
             final_score = self.score_manager.total_score
         if final_score > self.high_score:
             self.high_score = final_score
+            self.save_high_score()
 
     def compute_clear_time_bonus(self):
         elapsed = self.current_elapsed_time()
