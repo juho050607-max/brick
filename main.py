@@ -1,8 +1,9 @@
-﻿import math
+import math
 import random
 import time
 import tkinter as tk
 import pygame
+from PIL import Image, ImageTk
 
 
 WIDTH = 800
@@ -12,8 +13,8 @@ UI_HEIGHT = 50
 STAGE_COUNT = 5
 
 # 벽돌 배치: 행 수 증가, 가로 간격 축소
-BRICK_ROWS = 7
-BRICK_COLS = 16
+BRICK_ROWS = 6
+BRICK_COLS = 10
 BRICK_GAP_X = 5
 BRICK_GAP_Y = 10
 BRICK_MARGIN_X = 24
@@ -283,7 +284,7 @@ class Ball:
 
 
 class Brick:
-    def __init__(self, x, y, emotion, hp, score_value, color):
+    def __init__(self, x, y, emotion, hp, score_value, color, image_dict=None):
         self.x = x
         self.y = y
         self.w = BRICK_WIDTH
@@ -297,6 +298,7 @@ class Brick:
         self.visible = True
         self.canvas_item = None
         self.crack_item = None
+        self.image_dict = image_dict
 
     def draw(self, canvas):
         if self.destroyed or not self.visible:
@@ -307,18 +309,21 @@ class Brick:
             return
 
         if self.canvas_item is None:
-            self.canvas_item = canvas.create_rectangle(
-                self.x, self.y, self.x + self.w, self.y + self.h,
-                fill=self.color, outline="white", width=1, tags=("game",)
-            )
-            self.crack_item = canvas.create_text(
-                self.x + self.w / 2,
-                self.y + self.h / 2,
-                text="",
-                fill="white",
-                font=("Arial", 10, "bold"),
-                tags=("game",)
-            )
+            
+            if self.emotion == "anger":
+                self.canvas_item = canvas.create_image(
+                    self.x + self.w /2,
+                    self.y + self.h /2,
+                    image = self.image_dict["anger_hp3"],
+                    tags=("game",
+                          )
+                )
+            
+            else:
+                self.canvas_item = canvas.create_rectangle(
+                    self.x, self.y, self.x + self.w, self.y+self.h, fill=self.color,
+                    outline="white", width=1, tags=("game",)
+                )
         else:
             canvas.itemconfigure(self.canvas_item, state="normal")
             canvas.itemconfigure(self.crack_item, state="normal")
@@ -330,6 +335,18 @@ class Brick:
         else:
             crack_text = ""
         canvas.itemconfigure(self.crack_item, text=crack_text)
+
+        if self.emotion == "anger":
+            if self.hp >= 3:
+                image_key = "anger_hp3"
+            elif self.hp >=2:
+                image_key = "anger_hp2"
+            else:
+                image_key = "anger_hp1"
+
+            canvas.itemconfig(
+                self.canvas_item, image=self.image_dict[image_key]
+            )
 
     def remove(self, canvas):
         self.destroyed = True
@@ -431,6 +448,19 @@ class EmotionDestroyer:
         self.canvas = tk.Canvas(self.root, width=WIDTH, height=HEIGHT, bg="black")
         self.canvas.pack()
 
+        self.brick_images = {
+            "anger_hp3": ImageTk.PhotoImage(
+                Image.open("assets/image/anger3.png").resize((BRICK_WIDTH+37, BRICK_HEIGHT+37))
+            ),
+            "anger_hp2": ImageTk.PhotoImage(
+                Image.open("assets/image/anger2.png").resize((BRICK_WIDTH+37, BRICK_HEIGHT+37))
+            ),
+            "anger_hp1": ImageTk.PhotoImage(
+                Image.open("assets/image/anger1.png").resize((BRICK_WIDTH+37, BRICK_HEIGHT+37))
+            ),
+
+        }
+
         self.root.bind("<Left>", self.key_left_press)
         self.root.bind("<Right>", self.key_right_press)
         self.root.bind("a", self.key_left_press)
@@ -510,7 +540,7 @@ class EmotionDestroyer:
                 y = BRICK_START_Y + r * (BRICK_HEIGHT + BRICK_GAP_Y)
                 emotion = random.choice(emotions)
                 if emotion == "anger":
-                    brick = Brick(x, y, "anger", 3, 100, "#a53d3d")
+                    brick = Brick(x, y, "anger", 3, 100, "#a53d3d",self.brick_images)
                 elif emotion == "joy":
                     brick = Brick(x, y, "joy", 1, 60, "#d8d23f")
                 elif emotion == "fear":
