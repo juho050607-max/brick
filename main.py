@@ -572,10 +572,15 @@ class EmotionDestroyer:
         self.root.bind("<space>", self.space_handler)
         self.root.bind("r", self.restart_game)
         self.root.bind("R", self.restart_game)
+        self.root.bind("c", self.force_clear_stage_key)
+        self.root.bind("C", self.force_clear_stage_key)
 
         self.reset_game(full_reset=True)
         self.run()
         self.root.mainloop()
+    
+    def force_clear_stage_key(self, event=None):  
+        self.force_clear_stage()
 
     def game_now(self):
         if self.pause_started_at is not None:
@@ -829,7 +834,7 @@ class EmotionDestroyer:
         x1 = x0 + panel_w
         y1 = y0 + panel_h
 
-        self.canvas.create_rectangle(x0, y0, x1, y1, fill="white", outline="black", tags=("overlay",))
+        self.canvas.create_rectangle(x0, y0, x1, y1, fill="black", outline="white", tags=("overlay",))
 
         restart_base = 18
         score_bonus = self.clear_time_bonus
@@ -874,7 +879,7 @@ class EmotionDestroyer:
         center_x = (x0 + x1) / 2
         y = y0 + (panel_h - total_h) / 2
         for idx, (text_item, font, h) in enumerate(zip(texts, fonts, heights)):
-            self.canvas.create_text(center_x, y + h / 2, text=text_item, fill="black", font=font, tags=("overlay",))
+            self.canvas.create_text(center_x, y + h / 2, text=text_item, fill="white", font=font, tags=("overlay",))
             if idx < len(gaps):
                 y += h + gaps[idx]
 
@@ -1438,6 +1443,17 @@ class EmotionDestroyer:
             self.update_ui()
 
         self.root.after(FPS_DELAY_MS, self.run)
+    
+    def force_clear_stage(self):     #시연을 위한 스테이지 강제 클리어
+        for brick in self.bricks:
+            if not brick.destroyed:
+                self.finalize_destroyed_brick(
+                    brick,
+                    brick.score_value,
+                    spawn_item=False
+                )
+
+        self.advance_stage_or_clear()
 
 
 if __name__ == "__main__":
